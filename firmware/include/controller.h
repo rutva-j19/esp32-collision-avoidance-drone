@@ -1,13 +1,7 @@
-#pragma once
+#ifndef OBSTACLE_CONTROLLER_H
+#define OBSTACLE_CONTROLLER_H
 #include "config.h"
-
-// One measurement, with its age and validity kept alongside the distance.
-// A missing reading must not look like a clear path.
-struct DistanceReading {
-    uint16_t distanceMm = 0;
-    uint32_t updatedAtMs = 0;
-    bool valid = false;
-};
+#include "distance_filter.h"
 
 struct SensorReadings {
     DistanceReading front;
@@ -24,6 +18,12 @@ struct MotorCommands {
     int backRight = 0;
 };
 
+struct ObstacleFlags {
+    bool front = false;
+    bool left = false;
+    bool right = false;
+};
+
 enum class ControllerState { Disarmed, Armed, Fault };
 
 // No Arduino calls here: this file makes decisions, not hardware accesses.
@@ -34,13 +34,15 @@ public:
             !readingsAreUsable(readings, nowMs)) {
             return false;
         }
+        obstacles = {};
         state = ControllerState::Armed;
         update(readings, nowMs);
-        return true;
+        return state == ControllerState::Armed;
     }
 
     void disarm() {
         commands = {};
+        obstacles = {};
         // Disarming stops outputs but does not acknowledge an existing fault.
         if (state != ControllerState::Fault) {
             state = ControllerState::Disarmed;
@@ -50,10 +52,14 @@ public:
     void reportFault() {
         state = ControllerState::Fault;
         commands = {};
+        obstacles = {};
     }
 
     bool clearFault(const SensorReadings& readings, uint32_t nowMs) {
         if (state != ControllerState::Fault ||
+            readings.front.rawDistanceMm < Config::criticalDistanceMm ||
+            readings.left.rawDistanceMm < Config::criticalDistanceMm ||
+            readings.right.rawDistanceMm < Config::criticalDistanceMm ||
             !readingsAreUsable(readings, nowMs)) {
             return false;
         }
@@ -72,20 +78,33 @@ public:
             return;
         }
 
+        obstacles.front = updateObstacle(obstacles.front, readings.front);
+        obstacles.left = updateObstacle(obstacles.left, readings.left);
+        obstacles.right = updateObstacle(obstacles.right, readings.right);
+
+        // Bench interlock: a valid critical raw sample bypasses the median.
+        // It latches a fault, so recovery requires clear + arm, not auto-restart.
+        if (readings.front.rawDistanceMm < Config::criticalDistanceMm ||
+            readings.left.rawDistanceMm < Config::criticalDistanceMm ||
+            readings.right.rawDistanceMm < Config::criticalDistanceMm) {
+            reportFault();
+            return;
+        }
+
         commands = {Config::baseMotorPwm, Config::baseMotorPwm,
                     Config::baseMotorPwm, Config::baseMotorPwm};
 
-        // First version: demonstrate which sensor triggered using motor pairs.
+        // Demonstrate each obstacle flag using the existing motor-pair response.
         // This is NOT a flight mixer or a steering/navigation algorithm.
-        if (readings.front.distanceMm < Config::obstacleDistanceMm) {
+        if (obstacles.front) {
             commands.frontLeft -= Config::obstaclePwmReduction;
             commands.frontRight -= Config::obstaclePwmReduction;
         }
-        if (readings.left.distanceMm < Config::obstacleDistanceMm) {
+        if (obstacles.left) {
             commands.frontLeft -= Config::obstaclePwmReduction;
             commands.backLeft -= Config::obstaclePwmReduction;
         }
-        if (readings.right.distanceMm < Config::obstacleDistanceMm) {
+        if (obstacles.right) {
             commands.frontRight -= Config::obstaclePwmReduction;
             commands.backRight -= Config::obstaclePwmReduction;
         }
@@ -94,6 +113,8 @@ public:
         commands.backLeft = limitPwm(commands.backLeft);
         commands.backRight = limitPwm(commands.backRight);
     }
+
+    const ObstacleFlags& getObstacles() const { return obstacles; }
 
     ControllerState getState() const { return state; }
     const MotorCommands& getMotorCommands() const { return commands; }
@@ -107,10 +128,19 @@ public:
 private:
     ControllerState state = ControllerState::Disarmed;
     MotorCommands commands;
+    ObstacleFlags obstacles;
+
+    bool updateObstacle(bool blocked, const DistanceReading& reading) const {
+        if (reading.distanceMm < Config::obstacleDistanceMm) return true;
+        if (reading.distanceMm > Config::obstacleClearanceMm) return false;
+        return blocked;
+    }
 
     bool readingIsUsable(const DistanceReading& reading, uint32_t nowMs) const {
         // Unsigned subtraction also works when the millisecond counter wraps.
         return reading.valid &&
+               reading.rawDistanceMm >= Config::minimumDistanceMm &&
+               reading.rawDistanceMm <= Config::maximumDistanceMm &&
                reading.distanceMm >= Config::minimumDistanceMm &&
                reading.distanceMm <= Config::maximumDistanceMm &&
                uint32_t(nowMs - reading.updatedAtMs) <= Config::sensorStaleAfterMs;
@@ -122,3 +152,5 @@ private:
         return pwm;
     }
 };
+
+#endif // OBSTACLE_CONTROLLER_H

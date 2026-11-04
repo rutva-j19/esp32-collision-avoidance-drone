@@ -1,4 +1,5 @@
-#pragma once
+#ifndef OBSTACLE_CONFIG_H
+#define OBSTACLE_CONFIG_H
 #include <cstdint>
 
 // These pin assignments are provisional until the schematic is reviewed.
@@ -31,7 +32,18 @@ namespace Config {
     constexpr int baseMotorPwm = 100;
     constexpr int maximumMotorPwm = 180;
     constexpr int obstaclePwmReduction = 50;
+    // Detection is strictly below 500; clearance is strictly above 650.
     constexpr uint16_t obstacleDistanceMm = 500;
+    constexpr uint16_t obstacleClearanceMm = 650;
+    constexpr uint16_t criticalDistanceMm = 150; // Raw-reading bench stop.
+    constexpr unsigned medianWindowSize = 3;
+
+    static_assert(medianWindowSize == 3, "This filter uses exactly three samples");
+    static_assert(minimumDistanceMm < criticalDistanceMm &&
+                  criticalDistanceMm < obstacleDistanceMm &&
+                  obstacleDistanceMm < obstacleClearanceMm &&
+                  obstacleClearanceMm <= maximumDistanceMm,
+                  "Distance thresholds must be ordered");
 
     // Leave false until the motor circuit has been reviewed and checked.
     // Commanded PWM is still calculated and printed when output is disabled.
@@ -47,3 +59,5 @@ namespace Config {
     static_assert(measurementPeriodMs * 1000 >= measurementBudgetUs,
                   "Measurement period must cover the timing budget");
 }
+
+#endif // OBSTACLE_CONFIG_H

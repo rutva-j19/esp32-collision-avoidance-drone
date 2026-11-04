@@ -1,4 +1,5 @@
-#pragma once
+#ifndef OBSTACLE_SENSORS_H
+#define OBSTACLE_SENSORS_H
 #include <Arduino.h>
 #include <Wire.h>
 #include <VL53L1X.h>
@@ -10,6 +11,10 @@ public:
     bool begin() {
         readings = {};
         initialized = false;
+        nextSensor = 0;
+        frontFilter.reset();
+        leftFilter.reset();
+        rightFilter.reset();
         // All sensors boot at 0x29. Hold all off before enabling them individually.
         holdOff(Config::frontShutdownPin);
         holdOff(Config::leftShutdownPin);
@@ -41,9 +46,9 @@ public:
     void pollNextSensor() {
         if (!initialized) return;
         switch (nextSensor) {
-            case 0: readSensor(frontSensor, readings.front); break;
-            case 1: readSensor(leftSensor, readings.left); break;
-            case 2: readSensor(rightSensor, readings.right); break;
+            case 0: readSensor(frontSensor, frontFilter, readings.front); break;
+            case 1: readSensor(leftSensor, leftFilter, readings.left); break;
+            case 2: readSensor(rightSensor, rightFilter, readings.right); break;
         }
         nextSensor = (nextSensor + 1) % 3;
     }
@@ -54,6 +59,9 @@ private:
     VL53L1X frontSensor;
     VL53L1X leftSensor;
     VL53L1X rightSensor;
+    DistanceFilter frontFilter;
+    DistanceFilter leftFilter;
+    DistanceFilter rightFilter;
     SensorReadings readings;
     bool initialized = false;
     uint8_t nextSensor = 0;
@@ -84,10 +92,10 @@ private:
         return sensor.last_status == 0;
     }
 
-    void readSensor(VL53L1X& sensor, DistanceReading& reading) {
+    void readSensor(VL53L1X& sensor, DistanceFilter& filter, DistanceReading& reading) {
         const bool ready = sensor.dataReady();
         if (sensor.last_status != 0) {
-            reading.valid = false;
+            reading = filter.add(0, false, millis());
             return;
         }
         if (!ready) {
@@ -96,11 +104,13 @@ private:
         }
         const uint16_t distance = sensor.read(false);
         const bool timedOut = sensor.timeoutOccurred();
-        reading.distanceMm = distance;
-        reading.updatedAtMs = millis();
-        reading.valid = !timedOut && sensor.last_status == 0 &&
+        const bool valid = !timedOut && sensor.last_status == 0 &&
             sensor.ranging_data.range_status == VL53L1X::RangeValid &&
             distance >= Config::minimumDistanceMm &&
             distance <= Config::maximumDistanceMm;
+        // Only a newly completed measurement enters the filter.
+        reading = filter.add(distance, valid, millis());
     }
 };
+
+#endif // OBSTACLE_SENSORS_H

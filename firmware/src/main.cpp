@@ -77,10 +77,14 @@ void printHelp() {
 void printStatus() {
     const auto& readings = sensors.getReadings();
     const auto& commands = controller.getMotorCommands();
-    Serial.printf("%s | distance mm F:%u L:%u R:%u | valid F:%d L:%d R:%d",
+    Serial.printf("%s | filtered mm F:%u L:%u R:%u | valid F:%d L:%d R:%d",
         stateName(), readings.front.distanceMm, readings.left.distanceMm,
         readings.right.distanceMm, readings.front.valid, readings.left.valid,
         readings.right.valid);
+    const auto& obstacles = controller.getObstacles();
+    Serial.printf(" | raw mm F:%u L:%u R:%u | blocked F:%d L:%d R:%d",
+        readings.front.rawDistanceMm, readings.left.rawDistanceMm,
+        readings.right.rawDistanceMm, obstacles.front, obstacles.left, obstacles.right);
     Serial.printf(" | fresh+valid:%d | commanded PWM FL:%d FR:%d BL:%d BR:%d",
         controller.readingsAreUsable(readings, millis()), commands.frontLeft,
         commands.frontRight, commands.backLeft, commands.backRight);
@@ -121,7 +125,7 @@ void setup() {
     // Motor pins are initialized before sensor setup or startup messages.
     const bool motorsReady = motors.begin();
     Serial.begin(Config::serialBaudRate);
-    Serial.println("\nESP32 obstacle controller - initial bench firmware");
+    Serial.println("\nESP32 obstacle controller - filtered bench firmware");
     const bool sensorsReady = sensors.begin();
     hardwareReady = motorsReady && sensorsReady;
     if (!hardwareReady) {
